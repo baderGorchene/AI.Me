@@ -1,59 +1,51 @@
 import os
-import torch
-from typing import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from groq import AsyncGroq
 from pydantic import BaseModel
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
+load_dotenv()
 
-# Model ID — Qwen2.5-0.5B-Instruct is small enough for CPU inference
-MODEL_ID = os.getenv("MODEL_ID", "Qwen/Qwen2.5-0.5B-Instruct")
+# Groq API configuration
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Global variables
-model = None
-tokenizer = None
+# Best free-tier model: 14,400 req/day, 30 req/min, 6K tokens/min
+MODEL_ID = os.getenv("MODEL_ID", "llama-3.1-8b-instant")
+
+# Global Groq client
+client: AsyncGroq | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global model, tokenizer
+    global client
 
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_ID,
-        trust_remote_code=True,
-    )
+    if not GROQ_API_KEY:
+        raise RuntimeError(
+            "GROQ_API_KEY is not set. "
+            "Get one free at https://console.groq.com/keys"
+        )
 
-    # Load model — use float32 on CPU for compatibility
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.float32,
-        device_map="cpu",
-        trust_remote_code=True,
-    )
-    model.eval()
+    client = AsyncGroq(api_key=GROQ_API_KEY)
 
     yield
 
-    model = None
-    tokenizer = None
+    client = None
 
 
 app = FastAPI(
-    title="AI.Me — Qwen 2.5 0.5B API",
-    description="A single FastAPI endpoint for text generation using transformers",
+    title="AI.Me",
+    description="Personal AI assistant powered by Groq",
     version="1.0.0",
     lifespan=lifespan,
 )
 
 
 class PromptRequest(BaseModel):
-    prompt: str
-    max_tokens: int = 512
-    temperature: float = 0.7
-    top_p: float = 0.9
+    text: str
 
 
 class PromptResponse(BaseModel):
@@ -62,29 +54,25 @@ class PromptResponse(BaseModel):
 
 @app.post("/generate", response_model=PromptResponse)
 async def generate_text(request: PromptRequest):
-    """Generate text using the transformers model."""
-    if model is None or tokenizer is None:
-        raise HTTPException(status_code=500, detail="Model is not initialized.")
+    """Generate text using Groq's LLM API."""
+    if client is None:
+        raise HTTPException(status_code=500, detail="Groq client is not initialized.")
 
     try:
-        # Tokenize the input prompt
-        inputs = tokenizer(request.prompt, return_tensors="pt")
+        chat_completion = await client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": request.text,
+                }
+            ],
+            model=MODEL_ID,
+            max_tokens=512,
+            temperature=0.7,
+        )
 
-        # Generate with the model
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=request.max_tokens,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                do_sample=request.temperature > 0,
-            )
-
-        # Decode only the generated tokens (skip the prompt)
-        generated_ids = outputs[0][inputs["input_ids"].shape[-1]:]
-        text = tokenizer.decode(generated_ids, skip_special_tokens=True)
-
-        return PromptResponse(response=text)
+        text = chat_completion.choices[0].message.content
+        return PromptResponse(response=text or "")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
