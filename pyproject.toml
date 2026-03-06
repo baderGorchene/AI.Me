@@ -10,17 +10,22 @@ dependencies = [
     "numpy",
     "pydantic",
     "torch",
-    "triton-windows>=3.6.0.post25",
+    "triton-windows>=3.6.0.post25 ; sys_platform == 'win32'",
+    "triton>=3.0.0 ; sys_platform == 'linux'",
     "uvicorn",
-    "vllm==0.8.5+cu124",
+    "vllm",
     "xgrammar>=0.1.18",
 ]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu124" }
-vllm = { url = "https://github.com/SystemPanic/vllm-windows/releases/download/v0.8.5/vllm-0.8.5+cu124-cp312-cp312-win_amd64.whl" }
+vllm = { url = "https://github.com/SystemPanic/vllm-windows/releases/download/v0.8.5/vllm-0.8.5+cu124-cp312-cp312-win_amd64.whl", marker = "sys_platform == 'win32'" }
+
 
 [[tool.uv.index]]
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
+
+[tool.uv]
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
